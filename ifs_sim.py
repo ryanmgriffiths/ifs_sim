@@ -7,7 +7,7 @@ import tqdm
 from hcipy import *
 import logging
 from ifs_sim_tools import _get_rect_extent
-
+import torch
 
 class MyFraunhoferPropagator(AgnosticOpticalElement):
     '''A monochromatic perfect lens propagator.
@@ -135,24 +135,6 @@ class WavefrontSC(hcipy.Wavefront):
             #input_stokes_vector=new_stokes
         )
 
-ELT_DIA = 39.14634
-
-pupil_grid = hcipy.make_pupil_grid(dims=1024, diameter=ELT_DIA)
-#pupil_grid = hcipy.make_pupil_grid(1024,100e-3)
-#eltgrid = hcipy.make_circular_aperture(13.5e-3)(pupil_grid)
-
-ELT_AP  = hcipy.make_elt_aperture()
-eltgrid = ELT_AP(pupil_grid)
-
-fpgrid  = hcipy.make_focal_grid(20, 30, f_number=850, reference_wavelength=800e-9)
-print(fpgrid.x)
-
-
-ELTFocusProp = hcipy.FraunhoferPropagator(pupil_grid, fpgrid, focal_length=850 * ELT_DIA)
-
-wf = hcipy.Wavefront(eltgrid, wavelength=800e-9)
-wf2 = ELTFocusProp.forward(wf)
-#wf2 = hcipy.Wavefront(hcipy.make_rectangular_aperture(0.01)(fpgrid), wavelength=800e-9)
 
 
 class ImageSlicer(hcipy.OpticalElement):
@@ -178,6 +160,8 @@ class ImageSlicer(hcipy.OpticalElement):
         self.mirror_file = pd.read_csv(self.mirror_file)
         self.slicer_mag = float(cfg.get('slicer_mag', 1.0))
         self.slicer_dims = (self.slice_dims[0], self.slice_dims[1] * self.no_slices)
+
+        self.params_dict = cfg
 
     def _get_slice_centres(self):
         slice_centres = np.zeros((self.no_slices, 2))
@@ -209,21 +193,22 @@ class ImageSlicer(hcipy.OpticalElement):
         slice_centres_pix = np.einsum('ij,pj->pi', R, slice_centres_pix)
         slice_centres_pix += np.array(focal_plane.grid.shape) // 2
         slice_centres_pix += np.array(self.slicer_decenter)
-        #subregion_size = int(max(self.slice_dims) / focal_plane.grid.delta[0])
+        subregion_size = int(max(self.slice_dims) / focal_plane.grid.delta[0])
         extents = _get_rect_extent(self.slicer_dims, rotation=self.rotation)
-        subregion_size = np.ceil(
-            max([
-                abs(extents[1]-extents[0]),
-                abs(extents[3]-extents[2])
-            ])
-        )
+        
+        #subregion_size = np.ceil(
+        #    max([
+        #        abs(extents[1]-extents[0]),
+        #        abs(extents[3]-extents[2])
+        #    ])
+        #)
 
         sub_images = []
         for p in tqdm.tqdm(
             range(slice_centres.shape[0]),
             colour='red',
             desc='Slicing Field',
-            leave=False):
+            leave=False, ascii=' ▊'):
 
             slice_mask = hcipy.make_rectangular_aperture(
                 size = self.slice_dims,
@@ -244,6 +229,8 @@ class ImageSlicer(hcipy.OpticalElement):
 
     def _propto_pupil_mirror(self, sub_images):
 
+        print(sub_images[0].grid.size, sub_images[0].grid.delta)
+
         fmin = np.min(np.abs(self.mirror_file.loc[:,'OAP EFL'] * 1e-3))
         input_grid_D = sub_images[0].grid.delta[0] * sub_images[0].grid.shape[0]
         resolution = fmin/input_grid_D * 800e-9
@@ -261,7 +248,8 @@ class ImageSlicer(hcipy.OpticalElement):
             desc='Pupil Mirror',
             colour='blue',
             leave=False,
-            total=self.no_slices):
+            total=self.no_slices,
+            ascii=' ▊'):
             prop = MyFraunhoferPropagator(
                 im.grid,
                 output_grid,
@@ -289,7 +277,8 @@ class ImageSlicer(hcipy.OpticalElement):
             total=self.no_slices,
             leave=False,
             colour='green',
-            desc='Pupil apod'):
+            desc='Pupil apod',
+            ascii=' ▊'):
 
             apod_im = apod.forward(im)
             pupil_images[n] = apod_im 
@@ -312,13 +301,22 @@ class ImageSlicer(hcipy.OpticalElement):
         input_grid_D = micro_pupils[0].grid.shape[0] * micro_pupils[0].grid.delta[0]
         resolution = fmin/input_grid_D * 800e-9
 
-        output_image_dims = np.asarray(self.slicer_dims) * self.slicer_mag
+        output_image_dims = np.asarray(self.slice_dims) * self.slicer_mag
+        resolution = output_image_dims.min()
         
-        output_grid = make_focal_grid(
+        """output_grid = make_focal_grid(
             q=2,
             num_airy=int(output_image_dims.max()/(2*resolution)),
             spatial_resolution=resolution,
             reference_wavelength=800e-9
+        )
+        """
+        oversize = int(self.params_dict.get('exit_slit_oversize', 1))
+
+        output_grid = make_focal_grid(
+            q = 2,
+            num_airy=oversize*int(output_image_dims.max()/(2*resolution)),
+            spatial_resolution=output_image_dims.min()
         )
 
         exit_slit_images = []
@@ -328,7 +326,8 @@ class ImageSlicer(hcipy.OpticalElement):
             total=len(micro_pupils),
             colour='magenta',
             leave=False,
-            desc='Making exit slit'):
+            desc='Making exit slit',
+            ascii=' ▊'):
 
             prop = MyFraunhoferPropagator(
                 pupil.grid,
@@ -341,6 +340,30 @@ class ImageSlicer(hcipy.OpticalElement):
 
         return exit_slit_images
 
+    def _create_exit_slit(self, slit_ims: list[Field]) -> np.ndarray:
+        """Create the exit slit by vertically stacking slit images and leaving
+        1 pixel spacing.
+        """
+        oversize = int(self.params_dict.get('exit_slit_oversize', 1))
+        slit_im_dim_oversized = slit_ims[0].grid.shape[0]
+        slit_im_dim = slit_im_dim_oversized//oversize
+
+        exit_slit_master_array = np.zeros((
+            slit_im_dim * self.no_slices + (self.no_slices - 1) + (slit_im_dim_oversized - slit_im_dim),
+            slit_im_dim_oversized
+        ), dtype=np.float64)
+
+        pos_counter = 0
+        for n, im in enumerate(slit_ims):
+            exit_slit_master_array[
+                pos_counter:pos_counter+slit_im_dim_oversized,
+                :slit_im_dim_oversized] += im.intensity.reshape(
+                    im.grid.shape
+                    ).astype(np.float64)
+            pos_counter += 1+slit_im_dim
+
+        return exit_slit_master_array
+
     def _create_slicer_mirror(self):
         return
 
@@ -349,36 +372,3 @@ class ImageSlicer(hcipy.OpticalElement):
     def backward(self, wavefront):
         return
 
-import matplotlib.pyplot as plt
-
-plt.figure()
-hcipy.imshow_field(wf2.amplitude, norm='log', grid_units=1e-3)
-plt.colorbar()
-plt.show()
-
-#test_im = hcipy.make_pupil_grid(128, 0.25)
-
-
-im = ImageSlicer('./slicer.cfg')
-ims = im._split_field(wf2)
-pups = im._propto_pupil_mirror(ims)
-
-#print(ims[0].grid.shape, ims[0].grid.delta)
-
-pups_apod = im._apply_pupil_mirror(pups)
-
-exit_slits = im._propto_exit_slit(pups_apod)
-
-
-
-print(ims[0].amplitude)
-
-plt.figure()
-hcipy.imshow_field(ims[0].power)
-plt.colorbar()
-plt.figure()
-hcipy.imshow_field(pups_apod[0].power)
-plt.show()
-plt.figure()
-hcipy.imshow_field(exit_slits[0].power)
-plt.show()

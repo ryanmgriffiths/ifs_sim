@@ -1,4 +1,18 @@
 import numpy as np
+import tqdm
+
+class progbar(tqdm.tqdm):
+    def __init__(*args, **kwargs):
+        kwargs.pop('ascii')
+        kwargs.pop('colour')
+        kwargs.pop('leave')
+        super().__init__(
+            *args,
+            leave=False,
+            colour='blue',
+            ascii=' ▊',
+            **kwargs
+        )
 
 def _get_rect_extent(rect_dims: tuple, rotation: float = 0) -> np.ndarray:
     extents = np.array([
