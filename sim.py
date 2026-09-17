@@ -1,54 +1,77 @@
 import hcipy
 import ifs_sim, ifs_sim_tools
+import matplotlib.pyplot as plt
+from hcipy import *
+import numpy as np
 
+NUM_MODES = 50
+PUPIL_DIAMETER = 3.35e-3  # m
+OCCULTMASK_SIZE = 450e-6  # um
+INPUT_F_NUMBER = 850
+CWL = 801e-9
+
+# DEFINE ELEMENTS
 
 # create a pupil
-"""ELT_DIA = 39.14634
-pupil_grid = hcipy.make_pupil_grid(dims=1024, diameter=ELT_DIA)
-ELT_AP  = hcipy.make_elt_aperture()
-eltgrid = ELT_AP(pupil_grid)"""
+pupil_grid = hcipy.make_pupil_grid(512, diameter=PUPIL_DIAMETER)
+ap = hcipy.make_circular_aperture(PUPIL_DIAMETER)(pupil_grid)
 
-pupil_grid = hcipy.make_pupil_grid(512, diameter=3.35e-3)
-ap = hcipy.make_circular_aperture(3.35e-3)(pupil_grid)
+wf = hcipy.Wavefront(ap, wavelength=CWL)
 
-
+# modes for the DM
 modebasis = hcipy.make_zernike_basis(
-    num_modes=50,
-    D=3.35e-3,
+    num_modes=NUM_MODES,
+    D=PUPIL_DIAMETER,
     grid=pupil_grid
 )
 
+# create the DM
 dm = hcipy.DeformableMirror(
     modebasis
 )
 
+lyot_occulting_mask = hcipy.make_circular_aperture(OCCULTMASK_SIZE)
+lyot_occulting_mask = hcipy.make_inverted_aperture(lyot_occulting_mask)
+lyot_occulting_grid = hcipy.make_focal_grid(
+    20, 2, f_number=INPUT_F_NUMBER, reference_wavelength=CWL
+)
+focal_plane_grid = lyot_occulting_mask(lyot_occulting_grid)
+focal_plane_grid = hcipy.Apodizer(focal_plane_grid)
 
 
-lyot_spot = 2 * 
+lyot_stop_mask = hcipy.make_circular_aperture(PUPIL_DIAMETER*0.95)
+lyot_stop_grid = pupil_grid.copy()
+lyot_stop_field = lyot_stop_mask(lyot_stop_grid)
+lyot_stop_field = hcipy.Apodizer(lyot_stop_field)
 
 LyotCoronaGraph = hcipy.LyotCoronagraph(
     input_grid=ap,
+    focal_plane_mask=focal_plane_grid,
+    lyot_stop=lyot_stop_field,
+    focal_length=756e-3)
 
-)
+dm.random(1e-9)
+wf = dm.forward(wf)
 
+wf2 = LyotCoronaGraph.forward(wf)
 
-
+wf2 = hcipy.Magnifier(0.265)(wf2)
 
 fpgrid  = hcipy.make_focal_grid(20, 30, f_number=850, reference_wavelength=800e-9)
-print(fpgrid.x)
 
+ELTFocusProp = hcipy.FraunhoferPropagator(
+    pupil_grid, fpgrid, focal_length=850 * wf2.grid.delta[0] * wf2.grid.shape[0])
 
-ELTFocusProp = hcipy.FraunhoferPropagator(pupil_grid, fpgrid, focal_length=850 * ELT_DIA)
-
-wf = hcipy.Wavefront(eltgrid, wavelength=800e-9)
-wf2 = ELTFocusProp.forward(wf)
+#wf = hcipy.Wavefront(eltgrid, wavelength=800e-9)
+wf2 = ELTFocusProp.forward(wf2)
 #wf2 = hcipy.Wavefront(hcipy.make_rectangular_aperture(0.01)(fpgrid), wavelength=800e-9)
+
+plt.figure()
+hcipy.imshow_field(wf2.power, grid_units=1e-3)
+plt.show()
+
 import matplotlib.pyplot as plt
 
-"""plt.figure()
-hcipy.imshow_field(wf2.amplitude, norm='log', grid_units=1e-3)
-plt.colorbar()
-plt.show()"""
 
 #test_im = hcipy.make_pupil_grid(128, 0.25)
 
