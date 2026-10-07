@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ifs-sim"
+version = "0.1.0"
+description = "Wave-optics simulation of an integral field spectrograph image slicer using HCIPy."
+requires-python = ">=3.9"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Ryan Griffiths" }]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Astronomy",
+    "Topic :: Scientific/Engineering :: Physics",
+]
+dependencies = [
+    "astropy",
+    "hcipy",
+    "matplotlib",
+    "numpy",
+    "pandas",
+    "torch",
+    "tqdm",
+    "pytest",
+    "ptest-mock",
+    "aotools"
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+cuda = ["cupy"]
+notebook = ["ipympl", "jupyterlab"]
+
+[project.urls]
+Repository = "https://github.com/ryanmgriffiths/ifs_sim"
+Issues = "https://github.com/ryanmgriffiths/ifs_sim/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["ifs_sim", "ifs_sim.*"]
+namespaces = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

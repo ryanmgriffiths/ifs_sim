@@ -1,7 +1,8 @@
 import hcipy
-import ifs_sim, ifs_sim_tools
+import ifs_sim.ifs_sim as ifs_sim, ifs_sim.ifs_sim_tools as ifs_sim_tools
 import matplotlib.pyplot as plt
 from hcipy import *
+from astropy.io import fits
 import numpy as np
 
 NUM_MODES = 50
@@ -10,12 +11,13 @@ OCCULTMASK_SIZE = 450e-6  # um
 INPUT_F_NUMBER = 850
 CWL = 801e-9
 
+STATIC_MAPS = '/Users/griffithsr/Library/CloudStorage/OneDrive-Nexus365/Projects/IFS_DRL_Simulations/data/micropupil_wavefront_maps/wavefront_maps.fits'
+
 # DEFINE ELEMENTS
 
-# create a pupil
+# create a pupil grid for input to the simulation
 pupil_grid = hcipy.make_pupil_grid(512, diameter=PUPIL_DIAMETER)
 ap = hcipy.make_circular_aperture(PUPIL_DIAMETER)(pupil_grid)
-
 wf = hcipy.Wavefront(ap, wavelength=CWL)
 
 # modes for the DM
@@ -25,6 +27,10 @@ modebasis = hcipy.make_zernike_basis(
     grid=pupil_grid
 )
 
+"""modebasis = hcipy.make_gaussian_influence_functions(
+    pupil_grid=pupil_grid, num_actuators_across_pupil=32, actuator_spacing=3.35e-3/32
+)
+"""
 # create the DM
 dm = hcipy.DeformableMirror(
     modebasis
@@ -50,7 +56,7 @@ LyotCoronaGraph = hcipy.LyotCoronagraph(
     lyot_stop=lyot_stop_field,
     focal_length=756e-3)
 
-dm.random(1e-9)
+#dm.random(1e-9)
 wf = dm.forward(wf)
 
 wf2 = LyotCoronaGraph.forward(wf)
@@ -75,16 +81,21 @@ import matplotlib.pyplot as plt
 
 #test_im = hcipy.make_pupil_grid(128, 0.25)
 
-
 im = ifs_sim.ImageSlicer('./slicer.cfg')
-ims = im._split_field(wf2)
+ims = im._split_field(wf2, preview=True)
 pups = im._propto_pupil_mirror(ims)
 
 #print(ims[0].grid.shape, ims[0].grid.delta)
+pups_apod = im._apply_pupil_mirror(pups, plot=True)
 
-pups_apod = im._apply_pupil_mirror(pups)
+phasemaps = fits.open(STATIC_MAPS)
+phases_nm = np.asarray([k.data for k in phasemaps])
+phasemap_deltas = np.asarray([[k.header['Dx'], k.header['Dy']] for k in phasemaps])
 
-exit_slits = im._propto_exit_slit(pups_apod)
+pups_apod2 = im._apply_micropupil_phase(
+    pups_apod, phases=phases_nm, sampling=phasemap_deltas)
+
+exit_slits = im._propto_exit_slit(pups_apod2, plot=True)
 
 exit_slit = im._create_exit_slit(exit_slits)
 
